@@ -1,0 +1,17 @@
+# Ignore dataset
+data/
+
+# Ignore trained models
+models/
+
+# Ignore outputs (graphs, images)
+outputs/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Large files
+*.h5
+*.jpg
+*.png
