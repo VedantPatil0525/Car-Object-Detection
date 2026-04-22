@@ -48,11 +48,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--testing-dir", type=Path, default=None, help="Folder with test images")
     p.add_argument("--models-dir", type=Path, default=root / "models", help="Where to save .keras models")
     p.add_argument("--outputs-dir", type=Path, default=root / "outputs", help="Plots and prediction images")
-    p.add_argument("--epochs", type=int, default=15, help="Epochs per optimizer")
+    p.add_argument("--epochs", type=int, default=50, help="Epochs per optimizer (default: 50)")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--val-fraction", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--trainable-base", action="store_true", help="Fine-tune ResNet50 (default: frozen base)")
+    p.add_argument("--no-trainable-base", action="store_true", help="Freeze ResNet50 (default: fine-tune)")
     p.add_argument("--no-weights", action="store_true", help="Do not use ImageNet weights (random init)")
     p.add_argument(
         "--skip-training",
@@ -129,7 +129,7 @@ def main() -> int:
                 batch_size=args.batch_size,
                 models_dir=args.models_dir,
                 weights=weights,
-                trainable_base=args.trainable_base,
+                trainable_base=not args.no_trainable_base,
             )
             plot_loss_comparison(histories, args.outputs_dir / "loss_comparison.png")
         else:

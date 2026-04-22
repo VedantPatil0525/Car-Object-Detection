@@ -17,14 +17,35 @@ from src.model import build_bbox_resnet50, compile_bbox_model
 
 logger = logging.getLogger(__name__)
 
-# SGD needs a smaller LR than raw SGD defaults: with frozen ResNet + MSE on ~0–224
-# coordinates, lr=1e-3 often blows up gradients (weights → NaN, loss → NaN). Adam/RMSprop
-# adapt per-parameter; SGD does not, so match the ~1e-4 scale used for Adam.
-OPTIMIZER_CONFIGS: Dict[str, keras.optimizers.Optimizer] = {
-    "adam": keras.optimizers.Adam(learning_rate=1e-4),
-    "sgd": keras.optimizers.SGD(learning_rate=1e-4, momentum=0.9),
-    "rmsprop": keras.optimizers.RMSprop(learning_rate=1e-4),
+OPTIMIZER_CONFIGS: Dict[str, Dict[str, float]] = {
+    "adam": {"learning_rate": 3e-4},
+    "sgd": {"learning_rate": 2e-4, "momentum": 0.95},
+    "rmsprop": {"learning_rate": 3e-4, "momentum": 0.9},
 }
+
+
+def make_optimizer(name: str) -> keras.optimizers.Optimizer:
+    """Create a fresh optimizer instance for each training run."""
+    if name == "adam":
+        return keras.optimizers.Adam(
+            learning_rate=OPTIMIZER_CONFIGS["adam"]["learning_rate"],
+            amsgrad=True,
+            clipnorm=1.0,
+        )
+    if name == "sgd":
+        return keras.optimizers.SGD(
+            learning_rate=OPTIMIZER_CONFIGS["sgd"]["learning_rate"],
+            momentum=OPTIMIZER_CONFIGS["sgd"]["momentum"],
+            nesterov=True,
+            clipnorm=1.0,
+        )
+    if name == "rmsprop":
+        return keras.optimizers.RMSprop(
+            learning_rate=OPTIMIZER_CONFIGS["rmsprop"]["learning_rate"],
+            momentum=OPTIMIZER_CONFIGS["rmsprop"]["momentum"],
+            clipnorm=1.0,
+        )
+    raise ValueError(f"Unknown optimizer name: {name}. Use {list(OPTIMIZER_CONFIGS)}")
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -49,8 +70,39 @@ def train_one_optimizer(
         raise ValueError(f"Unknown optimizer name: {name}. Use {list(OPTIMIZER_CONFIGS)}")
 
     _ensure_dir(models_dir)
-    model = build_bbox_resnet50(weights=weights, trainable_base=trainable_base)
-    compile_bbox_model(model, optimizer=OPTIMIZER_CONFIGS[name])
+    model = build_bbox_resnet50(
+        weights=weights, 
+        trainable_base=trainable_base,
+        dropout_rate=0.3,
+        l2_reg=1e-4
+    )
+    compile_bbox_model(model, optimizer=make_optimizer(name))
+
+    # Add callbacks for better training
+    best_path = models_dir / f"best_resnet50_bbox_{name}.keras"
+    callbacks = [
+        keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=12,
+            restore_best_weights=True,
+            verbose=1
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=4,
+            min_lr=5e-7,
+            verbose=1
+        ),
+        keras.callbacks.ModelCheckpoint(
+            filepath=str(best_path),
+            monitor="val_loss",
+            save_best_only=True,
+            save_weights_only=False,
+            verbose=1,
+        ),
+        keras.callbacks.TerminateOnNaN(),
+    ]
 
     logger.info("Training with optimizer=%s, samples=%d", name, len(X_train))
     try:
@@ -60,6 +112,7 @@ def train_one_optimizer(
             validation_data=(X_val, y_val),
             epochs=epochs,
             batch_size=batch_size,
+            callbacks=callbacks,
             verbose=1,
         )
     except Exception as e:
@@ -92,11 +145,11 @@ def train_one_optimizer(
 
 def train_all_optimizers(
     data: Dict[str, Any],
-    epochs: int = 15,
+    epochs: int = 50,
     batch_size: int = 16,
     models_dir: Optional[Path] = None,
     weights: str = "imagenet",
-    trainable_base: bool = False,
+    trainable_base: bool = True,
 ) -> Dict[str, keras.callbacks.History]:
     """
     Train adam, sgd, and rmsprop models on the same split.
